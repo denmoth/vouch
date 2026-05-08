@@ -72,6 +72,7 @@ shadowJar {
     relocate 'com.electronwill.nightconfig', 'com.nozz.vouch.libs.nightconfig'
     relocate 'org.postgresql', 'com.nozz.vouch.libs.postgresql'
     relocate 'com.mysql', 'com.nozz.vouch.libs.mysql'
+    relocate 'org.checkerframework', 'com.nozz.vouch.libs.checkerframework'
 }
 
 remapJar {
