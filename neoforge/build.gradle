@@ -19,6 +19,8 @@ configurations {
     shadowBundle {
         canBeResolved = true
         canBeConsumed = false
+        // The platform provides SLF4J at runtime; bundling it causes a split-package crash.
+        exclude group: 'org.slf4j'
     }
 }
 
