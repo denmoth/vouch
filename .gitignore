@@ -37,3 +37,8 @@ pnpm-global
 TODOs.md
 *.timestamp-*.mjs
 
+# Claude Code
+.claude/
+CLAUDE.md
+.claude.json
+.claude.local.json
