@@ -58,6 +58,12 @@
   "vouch.admin.lang_exported": "&aLanguage file exported to: &f{path}",
   "vouch.admin.database_error": "&cA database error occurred. Please check the server logs.",
   "vouch.admin.no_permission": "&cYou don't have permission to use this command.",
+  "vouch.admin.premium.forced_offline": "&aPlayer &6{player}&a has been marked as forced-offline (premium check disabled).",
+  "vouch.admin.premium.forced_online": "&aPlayer &6{player}&a forced-offline removed (premium check re-enabled).",
+  
+  "vouch.command.premium.marked_online": "&aPremium auto-login enabled! You will be verified on your next login.",
+  "vouch.command.premium.not_premium": "&cYour username was not found in the Mojang API. Only premium accounts can use this command.",
+  "vouch.command.premium.already_marked": "&eYou are already marked as online. Premium verification will happen on your next login.",
   
   "vouch.ui.title.welcome": "&6Authentication Required",
   "vouch.ui.title.login_success": "&a✓ Welcome Back!",

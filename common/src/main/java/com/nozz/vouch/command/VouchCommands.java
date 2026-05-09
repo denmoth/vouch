@@ -94,9 +94,12 @@ public final class VouchCommands {
                                     .executes(VouchCommands::executeLogin)));
         }
 
-        // /vouch admin commands
+        // /vouch commands
         dispatcher.register(
                 CommandManager.literal("vouch")
+                        .then(CommandManager.literal("markAsOnline")
+                                .requires(source -> PermissionHelper.hasUserPermission(source, PermissionHelper.Nodes.MARK_AS_ONLINE))
+                                .executes(VouchCommands::executeMarkAsOnline))
                         .then(CommandManager.literal("admin")
                                 .then(CommandManager.literal("reload")
                                         .requires(source -> PermissionHelper.hasAdminPermission(source, PermissionHelper.Nodes.ADMIN_RELOAD))
@@ -107,11 +110,22 @@ public final class VouchCommands {
                                                 .executes(VouchCommands::executeUnregister)))
                                 .then(CommandManager.literal("export-lang")
                                         .requires(source -> PermissionHelper.hasAdminPermission(source, PermissionHelper.Nodes.ADMIN_EXPORT_LANG))
-                                        .executes(VouchCommands::executeExportLang))));
+                                        .executes(VouchCommands::executeExportLang))
+                                .then(CommandManager.literal("force-offline")
+                                        .requires(source -> PermissionHelper.hasAdminPermission(source, PermissionHelper.Nodes.ADMIN_PREMIUM_OVERRIDE))
+                                        .then(CommandManager.argument("player", StringArgumentType.word())
+                                                .executes(VouchCommands::executeForceOffline)))
+                                .then(CommandManager.literal("force-online")
+                                        .requires(source -> PermissionHelper.hasAdminPermission(source, PermissionHelper.Nodes.ADMIN_PREMIUM_OVERRIDE))
+                                        .then(CommandManager.argument("player", StringArgumentType.word())
+                                                .executes(VouchCommands::executeForceOnline)))));
 
         // /auth - alias for /vouch
         dispatcher.register(
                 CommandManager.literal("auth")
+                        .then(CommandManager.literal("markAsOnline")
+                                .requires(source -> PermissionHelper.hasUserPermission(source, PermissionHelper.Nodes.MARK_AS_ONLINE))
+                                .executes(VouchCommands::executeMarkAsOnline))
                         .then(CommandManager.literal("admin")
                                 .then(CommandManager.literal("reload")
                                         .requires(source -> PermissionHelper.hasAdminPermission(source, PermissionHelper.Nodes.ADMIN_RELOAD))
@@ -122,7 +136,15 @@ public final class VouchCommands {
                                                 .executes(VouchCommands::executeUnregister)))
                                 .then(CommandManager.literal("export-lang")
                                         .requires(source -> PermissionHelper.hasAdminPermission(source, PermissionHelper.Nodes.ADMIN_EXPORT_LANG))
-                                        .executes(VouchCommands::executeExportLang))));
+                                        .executes(VouchCommands::executeExportLang))
+                                .then(CommandManager.literal("force-offline")
+                                        .requires(source -> PermissionHelper.hasAdminPermission(source, PermissionHelper.Nodes.ADMIN_PREMIUM_OVERRIDE))
+                                        .then(CommandManager.argument("player", StringArgumentType.word())
+                                                .executes(VouchCommands::executeForceOffline)))
+                                .then(CommandManager.literal("force-online")
+                                        .requires(source -> PermissionHelper.hasAdminPermission(source, PermissionHelper.Nodes.ADMIN_PREMIUM_OVERRIDE))
+                                        .then(CommandManager.argument("player", StringArgumentType.word())
+                                                .executes(VouchCommands::executeForceOnline)))));
 
         // /logout - Invalidate session and disconnect
         dispatcher.register(
@@ -656,5 +678,111 @@ public final class VouchCommands {
             LOGGER.warn("Could not check OP status for player {}", player.getName().getString());
         }
         return false;
+    }
+
+    /**
+     * Handle /vouch admin force-offline <player>
+     * Marks a player username as forced-offline, skipping premium auto-login.
+     */
+    private static int executeForceOffline(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        String playerName = StringArgumentType.getString(context, "player");
+
+        DatabaseManager.getInstance().setForcedOffline(playerName, true, source.getName()).thenAccept(success -> {
+            VouchMod.getInstance().runOnMainThread(() -> {
+                if (success) {
+                    source.sendMessage(Messages.premiumForcedOffline(playerName));
+                    LOGGER.info("Player {} marked as forced-offline by {}", playerName, source.getName());
+                } else {
+                    source.sendMessage(Messages.databaseError());
+                }
+            });
+        });
+
+        return 1;
+    }
+
+    /**
+     * Handle /vouch admin force-online <player>
+     * Removes forced-offline status, re-enabling premium auto-login for a player.
+     */
+    private static int executeForceOnline(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        String playerName = StringArgumentType.getString(context, "player");
+
+        DatabaseManager.getInstance().setForcedOffline(playerName, false, source.getName()).thenAccept(success -> {
+            VouchMod.getInstance().runOnMainThread(() -> {
+                if (success) {
+                    source.sendMessage(Messages.premiumForcedOnline(playerName));
+                    LOGGER.info("Player {} marked as force-online (premium check enabled) by {}", playerName,
+                            source.getName());
+                } else {
+                    source.sendMessage(Messages.databaseError());
+                }
+            });
+        });
+
+        return 1;
+    }
+
+    /**
+     * Handle /vouch markAsOnline
+     * Player command to opt into premium auto-login. Verifies username exists
+     * in Mojang API, then marks as online in DB for next login.
+     */
+    private static int executeMarkAsOnline(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+
+        if (!source.isExecutedByPlayer()) {
+            return 0;
+        }
+
+        ServerPlayerEntity player = source.getPlayer();
+        AuthManager authManager = AuthManager.getInstance();
+
+        if (!authManager.isAuthenticated(player)) {
+            player.sendMessage(Messages.mustLoginFirst(), false);
+            return 0;
+        }
+
+        if (!VouchConfigManager.getInstance().isPremiumAutoLogin()) {
+            return 0;
+        }
+
+        String username = player.getName().getString();
+
+        // Check if already marked
+        DatabaseManager.getInstance().getPremiumOverrideStatus(username).thenAccept(status -> {
+            if (status == com.nozz.vouch.db.PremiumOverrideStatus.MARKED_ONLINE) {
+                VouchMod.getInstance().runOnMainThread(() -> {
+                    player.sendMessage(Messages.premiumAlreadyMarkedOnline(), false);
+                });
+                return;
+            }
+
+            // Verify username exists in Mojang API
+            com.nozz.vouch.util.PremiumVerifier.getInstance().usernameExistsInMojangAPI(username).thenAccept(isPremium -> {
+                VouchMod.getInstance().runOnMainThread(() -> {
+                    if (player.isDisconnected()) return;
+
+                    if (!isPremium) {
+                        player.sendMessage(Messages.premiumMarkedOnlineNotPremium(), false);
+                        return;
+                    }
+
+                    DatabaseManager.getInstance().setForcedOffline(username, false, player.getUuid().toString())
+                            .thenAccept(success -> {
+                                VouchMod.getInstance().runOnMainThread(() -> {
+                                    if (!player.isDisconnected()) {
+                                        player.sendMessage(Messages.premiumMarkedOnline(), false);
+                                        LOGGER.info("Player {} opted into premium auto-login", username);
+                                    }
+                                });
+                            });
+                });
+            });
+        });
+
+        return 1;
     }
 }

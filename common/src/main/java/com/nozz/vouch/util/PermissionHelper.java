@@ -35,6 +35,10 @@ public final class PermissionHelper {
         public static final String ADMIN_RELOAD = "vouch.admin.reload";
         public static final String ADMIN_UNREGISTER = "vouch.admin.unregister";
         public static final String ADMIN_EXPORT_LANG = "vouch.admin.export-lang";
+        public static final String ADMIN_PREMIUM_OVERRIDE = "vouch.admin.premium-override";
+        
+        // Player premium commands
+        public static final String MARK_AS_ONLINE = "vouch.command.mark-as-online";
         
         // Special permissions
         public static final String BYPASS_AUTH = "vouch.bypass.auth";

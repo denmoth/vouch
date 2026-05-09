@@ -271,5 +271,25 @@ public final class Messages {
     public static Text premiumRequire2FA() {
         return prefixed("vouch.auth.premium.require_2fa");
     }
+
+    public static Text premiumForcedOffline(String playerName) {
+        return prefixed("vouch.admin.premium.forced_offline", "player", playerName);
+    }
+
+    public static Text premiumForcedOnline(String playerName) {
+        return prefixed("vouch.admin.premium.forced_online", "player", playerName);
+    }
+
+    public static Text premiumMarkedOnline() {
+        return prefixed("vouch.command.premium.marked_online");
+    }
+
+    public static Text premiumMarkedOnlineNotPremium() {
+        return prefixed("vouch.command.premium.not_premium");
+    }
+
+    public static Text premiumAlreadyMarkedOnline() {
+        return prefixed("vouch.command.premium.already_marked");
+    }
 }
 

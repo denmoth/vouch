@@ -103,6 +103,16 @@ public final class DatabaseManager {
                     ON vouch_sessions(uuid, ip_address)
                     """);
 
+            // Premium overrides table - for forced-offline players
+            stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS vouch_premium_overrides (
+                        username VARCHAR(16) PRIMARY KEY,
+                        forced_offline BOOLEAN DEFAULT FALSE,
+                        set_by VARCHAR(36),
+                        set_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """);
+
             LOGGER.info("Database schema initialized successfully");
         }
     }
@@ -147,6 +157,35 @@ public final class DatabaseManager {
 
             } catch (SQLException e) {
                 LOGGER.error("Error registering player {}", username, e);
+                return false;
+            }
+        });
+    }
+
+    /**
+     * Ensure a premium-verified player has a row in vouch_players.
+     * Uses INSERT ... WHERE NOT EXISTS to avoid duplicates if the player already registered.
+     */
+    public CompletableFuture<Boolean> ensurePremiumPlayerRegistered(UUID uuid, String username) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = connectionFactory.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(
+                         "INSERT INTO vouch_players (uuid, username, password_hash) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM vouch_players WHERE uuid = ?)")) {
+
+                String premiumHash = "PREMIUM_ACCOUNT";
+                stmt.setString(1, uuid.toString());
+                stmt.setString(2, username);
+                stmt.setString(3, premiumHash);
+                stmt.setString(4, uuid.toString());
+                int rows = stmt.executeUpdate();
+
+                if (rows > 0) {
+                    LOGGER.info("Premium player {} auto-registered in database", username);
+                }
+                return true;
+
+            } catch (SQLException e) {
+                LOGGER.error("Error ensuring premium player {} is registered", username, e);
                 return false;
             }
         });
@@ -521,6 +560,70 @@ public final class DatabaseManager {
             } catch (SQLException e) {
                 LOGGER.error("Error cleaning up expired sessions", e);
                 return 0;
+            }
+        });
+    }
+
+    /**
+     * Get the premium override status for a player username.
+     * Returns a tri-state: NO_OVERRIDE (no DB row), MARKED_ONLINE, or FORCED_OFFLINE.
+     */
+    public CompletableFuture<PremiumOverrideStatus> getPremiumOverrideStatus(String username) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = connectionFactory.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(
+                         "SELECT forced_offline FROM vouch_premium_overrides WHERE username = ?")) {
+
+                stmt.setString(1, username.toLowerCase());
+                var rs = stmt.executeQuery();
+
+                if (rs.next()) {
+                    return rs.getBoolean("forced_offline")
+                            ? PremiumOverrideStatus.FORCED_OFFLINE
+                            : PremiumOverrideStatus.MARKED_ONLINE;
+                }
+                return PremiumOverrideStatus.NO_OVERRIDE;
+
+            } catch (SQLException e) {
+                LOGGER.error("Error checking premium override status for {}", username, e);
+                return PremiumOverrideStatus.NO_OVERRIDE;
+            }
+        });
+    }
+
+    /**
+     * Set or update the forced-offline status for a player username.
+     */
+    public CompletableFuture<Boolean> setForcedOffline(String username, boolean forced, String setBy) {
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = connectionFactory.getDatabaseType() == ConnectionFactory.DatabaseType.POSTGRESQL
+                    ? """
+                      INSERT INTO vouch_premium_overrides (username, forced_offline, set_by, set_at)
+                      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                      ON CONFLICT (username) DO UPDATE SET forced_offline = ?, set_by = ?, set_at = CURRENT_TIMESTAMP
+                      """
+                    : """
+                      REPLACE INTO vouch_premium_overrides (username, forced_offline, set_by, set_at)
+                      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                      """;
+
+            try (Connection conn = connectionFactory.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+
+                stmt.setString(1, username.toLowerCase());
+                stmt.setBoolean(2, forced);
+                stmt.setString(3, setBy);
+
+                if (connectionFactory.getDatabaseType() == ConnectionFactory.DatabaseType.POSTGRESQL) {
+                    stmt.setBoolean(4, forced);
+                    stmt.setString(5, setBy);
+                }
+
+                return stmt.executeUpdate() > 0;
+
+            } catch (SQLException e) {
+                LOGGER.error("Error setting forced-offline for {}", username, e);
+                return false;
             }
         });
     }

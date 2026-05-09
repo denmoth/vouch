@@ -52,6 +52,7 @@ public final class VouchConfigManager {
     private int passwordMaxLength = 64;
     private boolean premiumAutoLogin = false;
     private boolean premiumAutoLoginRequire2FA = true;
+    private boolean premiumOfflineByDefault = true;
 
     private boolean sessionPersistence = true;
     private int sessionDuration = 3600;
@@ -221,6 +222,7 @@ public final class VouchConfigManager {
         passwordMaxLength = resolveInt("auth.password_max_length", passwordMaxLength);
         premiumAutoLogin = resolveBool("auth.premium_auto_login", premiumAutoLogin);
         premiumAutoLoginRequire2FA = resolveBool("auth.premium_auto_login_require_2fa", premiumAutoLoginRequire2FA);
+        premiumOfflineByDefault = resolveBool("auth.premium_offline_by_default", premiumOfflineByDefault);
         
         // Session
         sessionPersistence = resolveBool("session.persistence", sessionPersistence);
@@ -346,6 +348,8 @@ public final class VouchConfigManager {
         config.setComment("auth.premium_auto_login", "Auto-authenticate players with valid Mojang/Microsoft premium accounts.\nRequires server to be in online-mode=false. Players verified against Mojang API.\nIf using BungeeCord/Velocity with IP forwarding, UUIDs are already forwarded and this still works.");
         config.set("auth.premium_auto_login_require_2fa", premiumAutoLoginRequire2FA);
         config.setComment("auth.premium_auto_login_require_2fa", "If true, premium players who have 2FA enabled must still verify their 2FA code.\nRecommended to keep enabled for maximum security.");
+        config.set("auth.premium_offline_by_default", premiumOfflineByDefault);
+        config.setComment("auth.premium_offline_by_default", "If true, ALL players are treated as offline by default (no encryption challenge).\nPlayers must run /vouch markAsOnline to opt into premium auto-login on their next join.\nPrevents 'Invalid session' errors for cracked clients using premium usernames.\nIf false, any username that exists in the Mojang API will receive an encryption challenge.");
         
         // Session
         config.setComment("session", "Session management");
@@ -531,6 +535,7 @@ public final class VouchConfigManager {
     public int getPasswordMaxLength() { return passwordMaxLength; }
     public boolean isPremiumAutoLogin() { return premiumAutoLogin; }
     public boolean isPremiumAutoLoginRequire2FA() { return premiumAutoLoginRequire2FA; }
+    public boolean isPremiumOfflineByDefault() { return premiumOfflineByDefault; }
 
     // Session
     public boolean isSessionPersistenceEnabled() { return sessionPersistence; }

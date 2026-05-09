@@ -1,5 +1,6 @@
 package com.nozz.vouch.util;
 
+import com.mojang.authlib.GameProfile;
 import com.nozz.vouch.VouchMod;
 import net.minecraft.server.network.ServerPlayerEntity;
 import org.slf4j.Logger;
@@ -12,6 +13,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -33,6 +35,7 @@ public final class PremiumVerifier {
     private static final Logger LOGGER = LoggerFactory.getLogger("Vouch/PremiumVerifier");
 
     private static final String MOJANG_API_URL = "https://api.mojang.com/users/profiles/minecraft/";
+    private static final String SESSION_SERVER_URL = "https://sessionserver.mojang.com/session/minecraft/hasJoined";
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration CACHE_TTL = Duration.ofMinutes(5);
 
@@ -43,6 +46,7 @@ public final class PremiumVerifier {
 
     private final HttpClient httpClient;
     private final Map<UUID, CachedResult> cache = new ConcurrentHashMap<>();
+    private final Map<String, CachedResult> usernameCache = new ConcurrentHashMap<>();
 
     private PremiumVerifier() {
         this.httpClient = HttpClient.newBuilder()
@@ -164,6 +168,122 @@ public final class PremiumVerifier {
     }
 
     /**
+     * Check if a username exists as a premium Mojang account.
+     * Unlike isPremiumPlayer(), this does NOT compare UUIDs — it only checks
+     * whether the Mojang API returns a valid profile for the username.
+     * Used during the login phase to decide whether to initiate encryption.
+     *
+     * @param username The player's username
+     * @return CompletableFuture resolving to true if the username belongs to a premium account
+     */
+    public CompletableFuture<Boolean> usernameExistsInMojangAPI(String username) {
+        String normalizedName = username.toLowerCase(java.util.Locale.ROOT);
+
+        // Check cache first
+        CachedResult cached = usernameCache.get(normalizedName);
+        if (cached != null && !cached.isExpired()) {
+            LOGGER.debug("Username exists check for {} (cached): {}", username, cached.isPremium);
+            return CompletableFuture.completedFuture(cached.isPremium);
+        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                boolean exists = checkUsernameExists(username);
+                usernameCache.put(normalizedName, new CachedResult(exists));
+                LOGGER.debug("Username exists check for {}: {}", username, exists);
+                return exists;
+            } catch (Exception e) {
+                LOGGER.warn("Failed to check username existence for {}: {}", username, e.getMessage());
+                return false;
+            }
+        }, VouchMod.getInstance().getAsyncExecutor());
+    }
+
+    /**
+     * Check if a username exists in the Mojang API (HTTP call).
+     */
+    private boolean checkUsernameExists(String username) throws Exception {
+        if (!username.matches("[a-zA-Z0-9_]{3,16}")) {
+            return false;
+        }
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(MOJANG_API_URL + username))
+                .timeout(HTTP_TIMEOUT)
+                .GET()
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        return response.statusCode() == 200;
+    }
+
+    /**
+     * Verify a player's session with the Mojang session server.
+     * Called after the encryption handshake to confirm that the client
+     * actually owns the Mojang account they claim.
+     *
+     * @param username   The player's username
+     * @param serverHash The computed server ID hash (Minecraft-style SHA-1)
+     * @return CompletableFuture resolving to the authenticated GameProfile, or empty if verification fails
+     */
+    public CompletableFuture<Optional<GameProfile>> verifySession(String username, String serverHash) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return verifySessionSync(username, serverHash);
+            } catch (Exception e) {
+                LOGGER.warn("Session verification failed for {}: {}", username, e.getMessage());
+                return Optional.empty();
+            }
+        }, VouchMod.getInstance().getAsyncExecutor());
+    }
+
+    /**
+     * Synchronous session verification against the Mojang session server.
+     */
+    private Optional<GameProfile> verifySessionSync(String username, String serverHash) throws Exception {
+        if (!username.matches("[a-zA-Z0-9_]{3,16}")) {
+            return Optional.empty();
+        }
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(SESSION_SERVER_URL + "?username=" + username + "&serverId=" + serverHash))
+                .timeout(HTTP_TIMEOUT)
+                .GET()
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() == 200) {
+            String body = response.body();
+            UUID uuid = extractUuid(body);
+            String name = extractName(body);
+
+            if (uuid != null && name != null) {
+                LOGGER.info("Session verified for {} (UUID: {})", name, uuid);
+                return Optional.of(new GameProfile(uuid, name));
+            }
+        } else if (response.statusCode() == 204 || response.statusCode() == 404) {
+            LOGGER.debug("Session verification failed for {} (not authenticated with Mojang)", username);
+        } else {
+            LOGGER.warn("Unexpected session server response for {}: HTTP {}", username, response.statusCode());
+        }
+
+        return Optional.empty();
+    }
+
+    /**
+     * Extract the player name from Mojang API JSON response.
+     */
+    private String extractName(String json) {
+        Pattern namePattern = Pattern.compile("\"name\"\\s*:\\s*\"([a-zA-Z0-9_]{3,16})\"");
+        Matcher matcher = namePattern.matcher(json);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return null;
+    }
+
+    /**
      * Clear the cache for a specific player (e.g., on disconnect).
      */
     public void invalidateCache(UUID uuid) {
@@ -175,6 +295,7 @@ public final class PremiumVerifier {
      */
     public void clearCache() {
         cache.clear();
+        usernameCache.clear();
     }
 
     private static final class CachedResult {

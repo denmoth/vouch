@@ -22,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -250,52 +251,73 @@ public final class VouchMod {
 
     /**
      * Handle premium auto-login flow for a player.
-     * Checks the Mojang API asynchronously, then:
-     * - If premium + no 2FA → auto-authenticate
-     * - If premium + 2FA enabled → send to pre-auth jail for 2FA only
-     * - If not premium → fall back to normal auth flow
+     * 
+     * When premium_auto_login is enabled, the ServerLoginNetworkHandlerMixin
+     * intercepts the login phase and forces encryption for premium usernames.
+     * By the time PLAYER_JOIN fires, premium players already have their online UUID.
+     * 
+     * This method detects whether the player was verified at login time by
+     * comparing their UUID against the offline UUID for their username.
+     * If they differ, the player was verified as premium during login.
      */
     private void handlePremiumAutoLogin(ServerPlayerEntity serverPlayer, AuthManager authManager, DatabaseManager dbManager) {
-        PremiumVerifier.getInstance().isPremiumPlayer(serverPlayer).thenAccept(isPremium -> {
-            runOnMainThread(() -> {
-                if (serverPlayer.isDisconnected()) {
-                    return;
-                }
+        String username = serverPlayer.getName().getString();
+        UUID playerUuid = serverPlayer.getUuid();
 
-                if (isPremium) {
-                    VouchConfigManager config = VouchConfigManager.getInstance();
-                    // Check if player is registered and has 2FA enabled
-                    if (config.isPremiumAutoLoginRequire2FA()) {
-                        dbManager.has2FAEnabled(serverPlayer.getUuid()).thenAccept(has2FA -> {
-                            runOnMainThread(() -> {
-                                if (serverPlayer.isDisconnected()) return;
-                                if (has2FA) {
-                                    // Premium verified but must complete 2FA
-                                    authManager.addPendingPremiumFor2FA(serverPlayer);
-                                } else {
-                                    // Premium, no 2FA → instant auth
-                                    authManager.authenticateAsPremium(serverPlayer);
-                                    UXManager.getInstance().onPremiumAutoLogin(serverPlayer);
-                                }
-                            });
-                        });
-                    } else {
-                        // 2FA enforcement disabled for premium → instant auth
-                        authManager.authenticateAsPremium(serverPlayer);
-                        UXManager.getInstance().onPremiumAutoLogin(serverPlayer);
+        // Check if this player's UUID differs from the offline-mode UUID.
+        // If it does, the mixin already verified them as premium during login.
+        UUID offlineUuid = net.minecraft.util.Uuids.getOfflinePlayerUuid(username);
+        boolean verifiedAtLogin = !playerUuid.equals(offlineUuid);
+
+        if (verifiedAtLogin) {
+            // Player was verified as premium during the login handshake.
+            // Skip the redundant Mojang API call.
+            LOGGER.info("Player {} has online UUID (verified at login), proceeding with premium auto-login", username);
+            completePremiumAutoLogin(serverPlayer, authManager, dbManager);
+        } else {
+            // Player has an offline UUID — they were not verified at login.
+            // This means they are a non-premium (cracked) player.
+            LOGGER.debug("Player {} has offline UUID, proceeding with normal auth flow", username);
+            dbManager.isRegistered(serverPlayer.getUuid()).thenAccept(isRegistered -> {
+                runOnMainThread(() -> {
+                    if (!serverPlayer.isDisconnected()) {
+                        authManager.addPendingPlayer(serverPlayer, isRegistered);
                     }
-                } else {
-                    // Not premium → normal auth flow
-                    dbManager.isRegistered(serverPlayer.getUuid()).thenAccept(isRegistered -> {
-                        runOnMainThread(() -> {
-                            if (!serverPlayer.isDisconnected()) {
-                                authManager.addPendingPlayer(serverPlayer, isRegistered);
-                            }
-                        });
-                    });
-                }
+                });
             });
-        });
+        }
+    }
+
+    /**
+     * Complete premium auto-login for a player verified as premium.
+     * Handles 2FA enforcement if configured.
+     */
+    private void completePremiumAutoLogin(ServerPlayerEntity serverPlayer, AuthManager authManager, DatabaseManager dbManager) {
+        // Ensure premium player has a row in vouch_players before creating sessions
+        dbManager.ensurePremiumPlayerRegistered(serverPlayer.getUuid(), serverPlayer.getName().getString())
+                .thenAccept(registered -> {
+                    runOnMainThread(() -> {
+                        if (serverPlayer.isDisconnected()) return;
+
+                        VouchConfigManager config = VouchConfigManager.getInstance();
+                        if (config.isPremiumAutoLoginRequire2FA()) {
+                            dbManager.has2FAEnabled(serverPlayer.getUuid()).thenAccept(has2FA -> {
+                                runOnMainThread(() -> {
+                                    if (serverPlayer.isDisconnected()) return;
+                                    if (has2FA) {
+                                        authManager.addPendingPremiumFor2FA(serverPlayer);
+                                    } else {
+                                        authManager.authenticateAsPremium(serverPlayer);
+                                        UXManager.getInstance().onPremiumAutoLogin(serverPlayer);
+                                    }
+                                });
+                            });
+                        } else {
+                            authManager.authenticateAsPremium(serverPlayer);
+                            UXManager.getInstance().onPremiumAutoLogin(serverPlayer);
+                        }
+                    });
+                });
     }
 
     /**
