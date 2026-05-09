@@ -89,6 +89,7 @@ jobs:
         with:
           modrinth-id: ${{ vars.MODRINTH_PROJECT_ID }}
           modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          modrinth-unfeature-mode: none
 
           files: fabric-artifacts/vouch-fabric-*.jar
           name: "Vouch ${{ github.event.release.tag_name }} (Fabric)"
@@ -128,6 +129,7 @@ jobs:
         with:
           modrinth-id: ${{ vars.MODRINTH_PROJECT_ID }}
           modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          modrinth-unfeature-mode: none
 
           files: neoforge-artifacts/vouch-neoforge-*.jar
           name: "Vouch ${{ github.event.release.tag_name }} (NeoForge)"
